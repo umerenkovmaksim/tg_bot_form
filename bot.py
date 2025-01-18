@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import aiofiles 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -13,6 +14,17 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+lock = asyncio.Lock()
+count = 0
+
+async def load_count():
+    global count
+    async with aiofiles.open('count.txt', mode="r") as file:
+        count = int(await file.read())
+    
+async def save_count():
+    async with aiofiles.open('count.txt', mode="w") as file:
+        await file.write(str(count))
 
 class UserData(StatesGroup):
     name_and_surname = State()
@@ -22,23 +34,15 @@ class UserData(StatesGroup):
     city = State()
 
 async def delayed_message(chat_id: int):
-    await asyncio.sleep(5)
+    await asyncio.sleep(MESSAGE_DELAY)
     await bot.send_message(
         chat_id,
-        text=(
-            'Благодарим вас за ожидание!\n\n'
-            'Поздравляем, вы успешно прошли предварительный отбор!\n\n'
-            'Ваши индивидуальные условия:\n'
-            '- работа онлайн через нашу CRM-систему, ответы на сообщения пользователей (письменно) по заданному скрипту;\n'
-            '- график работы вы составляете индивидуально, от 20 до 48 часов в неделю;\n'
-            '- оплата еженедельно, ставка на старте работы 320 рублей/час;\n\n'
-            'Для продолжения подтвердите, актуальна ли для вас данная вакансия и сможете ли вы приступить к работе в ближайшие 30 дней.'
-        ),
+        text=WORK_QUESTION,
         reply_markup=confirm_work_kb.as_markup(),
     )
 
 @dp.message(Command("start"))
-async def welcome(message: types.Message):
+async def welcome(message: types.Message, state: FSMContext):
     await message.answer(
         HELLO_MESSAGE,
         reply_markup=start_kb.as_markup(),
@@ -90,16 +94,20 @@ async def set_work_type(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(UserData.city)
 async def set_city(message: types.Message, state: FSMContext):
+    global count
     await state.update_data(city=message.text)
     user_data = await state.get_data()
     await message.answer(
         text=END_FORM
     )
     chat = await bot.get_chat(ADMIN_CHANNEL_ID)
+    count += 1
+    await save_count()
     await bot.send_message(
         chat_id=chat.id,
         text=(
             f"Новая анкета кандидата:\n\n"
+            f"- ID: {count}\n"
             f"- Имя и фамилия: {user_data['name_and_surname']}\n"
             f"- Контактные данные: {user_data['contact']}\n"
             f"- Возраст: {user_data['age']}\n"
@@ -122,35 +130,24 @@ async def confirm_work(callback: types.CallbackQuery, state: FSMContext):
         text=CONFIRM_WORK,
         reply_markup=create_card_kb.as_markup(),
     )
-
-@dp.callback_query(F.data == 'no')
-async def confirm_work(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
-        text=CANCEL_WORK,
-    )
     await state.clear()
-
-@dp.callback_query(F.data == 'referral_share')
-async def referral_share(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        text=REFERRAL_SHARE,
-        reply_markup=after_referral_kb.as_markup(),
-    )
     
 @dp.callback_query(F.data == 'referral_done')
 async def referral_done(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        text=END_MESSAGE,
+        text=AFTER_REFERRAL_MESSAGE,
         reply_markup=card_kb.as_markup(),
     )
     
 @dp.callback_query(F.data == 'card_message')
 async def card_message(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        text=CARD_END_MESSAGE
+        text=CARD_END_MESSAGE,
+        reply_markup=end_kb.as_markup(),
     )
 
 async def main():
+    await load_count()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
